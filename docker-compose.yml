@@ -1,0 +1,20 @@
+name: form-field-store
+
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000/api}
+        VITE_PRODUCTS_ENDPOINT: ${VITE_PRODUCTS_ENDPOINT:-/products}
+        VITE_CATEGORIES_ENDPOINT: ${VITE_CATEGORIES_ENDPOINT:-/categories}
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
