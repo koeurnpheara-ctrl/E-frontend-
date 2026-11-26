@@ -7,7 +7,7 @@ RUN npm ci
 
 COPY . .
 
-ARG VITE_API_BASE_URL=http://localhost:8000/api
+ARG VITE_API_BASE_URL=/api
 ARG VITE_PRODUCTS_ENDPOINT=/products
 ARG VITE_CATEGORIES_ENDPOINT=/categories
 
