@@ -22,3 +22,31 @@ export async function getCategories() {
   const response = await api.get(categoriesEndpoint)
   return getCollection(response.data, 'categories')
 }
+
+function adminConfig(token) {
+  return { headers: { Authorization: `Bearer ${token}` } }
+}
+
+export async function loginAdmin(email, password) {
+  const response = await api.post('/admin/login', { email, password })
+  return response.data
+}
+
+export async function getAdminProducts(token) {
+  const response = await api.get('/admin/products', adminConfig(token))
+  return getCollection(response.data, 'products')
+}
+
+export async function createProduct(token, product) {
+  const response = await api.post('/admin/products', product, adminConfig(token))
+  return response.data.data
+}
+
+export async function updateProduct(token, id, product) {
+  const response = await api.put(`/admin/products/${id}`, product, adminConfig(token))
+  return response.data.data
+}
+
+export async function deleteProduct(token, id) {
+  await api.delete(`/admin/products/${id}`, adminConfig(token))
+}
