@@ -11,6 +11,7 @@ const productColumns = `
   id, name, description, price, image_url, image_alt, category, is_new,
   created_at, updated_at
 `
+const orderStatuses = new Set(['pending', 'confirmed', 'delivered', 'cancelled'])
 
 function asyncHandler(handler) {
   return (request, response, next) => {
@@ -79,6 +80,64 @@ function validateProduct(body) {
   }
 }
 
+function validateOrder(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return { error: 'Order details must be provided as a JSON object.' }
+  }
+  const customer = body.customer
+  if (!customer || typeof customer !== 'object' || Array.isArray(customer)) {
+    return { error: 'Delivery details are required.' }
+  }
+
+  const name = typeof customer.name === 'string' ? customer.name.trim() : ''
+  const phone = typeof customer.phone === 'string' ? customer.phone.trim() : ''
+  const address = typeof customer.address === 'string' ? customer.address.trim() : ''
+  const province = typeof customer.province === 'string' ? customer.province.trim() : ''
+  const notes = typeof customer.notes === 'string' ? customer.notes.trim() : ''
+
+  if (name.length < 2 || name.length > 150) return { error: 'Enter your name (up to 150 characters).' }
+  if (!/^[+0-9()\-\s]+$/.test(phone) || phone.replace(/\D/g, '').length < 8 || phone.replace(/\D/g, '').length > 15) {
+    return { error: 'Enter a valid phone number so we can confirm delivery.' }
+  }
+  if (!address || address.length > 500) return { error: 'Enter a delivery address (up to 500 characters).' }
+  if (province.length < 2 || province.length > 100) return { error: 'Enter a province or city.' }
+  if (notes.length > 1000) return { error: 'Delivery notes must be 1000 characters or fewer.' }
+  if (body.payment_method !== 'cash_on_delivery') {
+    return { error: 'Only cash on delivery is available right now.' }
+  }
+  if (!Array.isArray(body.items) || body.items.length < 1 || body.items.length > 50) {
+    return { error: 'Your order must contain between 1 and 50 different products.' }
+  }
+
+  const seenProductIds = new Set()
+  const items = []
+  for (const item of body.items) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      return { error: 'One or more order items are invalid.' }
+    }
+    const productId = String(item.product_id ?? '')
+    const quantity = item.quantity
+    const price = Number(item.unit_price)
+    if (!/^[1-9]\d{0,17}$/.test(productId)) return { error: 'One or more product IDs are invalid.' }
+    if (seenProductIds.has(productId)) return { error: 'Each product may only appear once in the order.' }
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 20) {
+      return { error: 'Product quantity must be between 1 and 20.' }
+    }
+    if (!Number.isFinite(price) || price < 0 || !/^\d+(\.\d{1,2})?$/.test(String(item.unit_price))) {
+      return { error: 'One or more product prices are invalid. Please refresh your cart.' }
+    }
+    seenProductIds.add(productId)
+    items.push({ product_id: productId, quantity, unit_price: price })
+  }
+
+  return {
+    value: {
+      customer: { name, phone, address, province, notes },
+      items,
+    },
+  }
+}
+
 router.post('/admin/login', rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 10,
@@ -107,6 +166,95 @@ router.get('/categories', asyncHandler(async (request, response) => {
     "SELECT DISTINCT category AS name FROM products WHERE category <> '' ORDER BY category",
   )
   return response.json({ data: result.rows })
+}))
+
+router.post('/orders', rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many order attempts. Please wait and try again.' },
+}), asyncHandler(async (request, response) => {
+  const parsed = validateOrder(request.body)
+  if (parsed.error) return response.status(400).json({ error: parsed.error })
+
+  const client = await pool.connect()
+  let transactionStarted = false
+  try {
+    await client.query('BEGIN')
+    transactionStarted = true
+    const productIds = parsed.value.items.map((item) => item.product_id)
+    const productResult = await client.query(
+      'SELECT id, name, price FROM products WHERE id = ANY($1::bigint[])',
+      [productIds],
+    )
+    const productsById = new Map(productResult.rows.map((product) => [String(product.id), product]))
+    if (productsById.size !== parsed.value.items.length) {
+      await client.query('ROLLBACK')
+      transactionStarted = false
+      return response.status(409).json({ error: 'A product in your cart is no longer available. Please refresh the shop.' })
+    }
+
+    const orderItems = parsed.value.items.map((item) => {
+      const product = productsById.get(item.product_id)
+      const unitPriceCents = Math.round(Number(product.price) * 100)
+      if (unitPriceCents !== Math.round(item.unit_price * 100)) {
+        return { error: true }
+      }
+      return {
+        product_id: item.product_id,
+        product_name: product.name,
+        unit_price_cents: unitPriceCents,
+        quantity: item.quantity,
+        line_total_cents: unitPriceCents * item.quantity,
+      }
+    })
+    if (orderItems.some((item) => item.error)) {
+      await client.query('ROLLBACK')
+      transactionStarted = false
+      return response.status(409).json({ error: 'A product price changed. Refresh your cart before placing the order.' })
+    }
+
+    const subtotalCents = orderItems.reduce((sum, item) => sum + item.line_total_cents, 0)
+    if (!Number.isSafeInteger(subtotalCents) || subtotalCents > 9999999999) {
+      await client.query('ROLLBACK')
+      transactionStarted = false
+      return response.status(400).json({ error: 'The order total is too large.' })
+    }
+
+    const { name, phone, address, province, notes } = parsed.value.customer
+    const orderResult = await client.query(
+      `INSERT INTO orders
+        (customer_name, customer_phone, shipping_address, shipping_province, customer_notes, subtotal)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, status, payment_method, subtotal, shipping_fee, created_at`,
+      [name, phone, address, province, notes, (subtotalCents / 100).toFixed(2)],
+    )
+    const order = orderResult.rows[0]
+    for (const item of orderItems) {
+      await client.query(
+        `INSERT INTO order_items
+          (order_id, product_id, product_name, unit_price, quantity, line_total)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          order.id,
+          item.product_id,
+          item.product_name,
+          (item.unit_price_cents / 100).toFixed(2),
+          item.quantity,
+          (item.line_total_cents / 100).toFixed(2),
+        ],
+      )
+    }
+    await client.query('COMMIT')
+    transactionStarted = false
+    return response.status(201).json({ data: order })
+  } catch (error) {
+    if (transactionStarted) await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
 }))
 
 router.get('/admin/products', requireAdmin, asyncHandler(async (request, response) => {
@@ -153,6 +301,45 @@ router.delete('/admin/products/:id', requireAdmin, asyncHandler(async (request, 
   const result = await pool.query('DELETE FROM products WHERE id = $1', [request.params.id])
   if (!result.rowCount) return response.status(404).json({ error: 'Product not found.' })
   return response.status(204).end()
+}))
+
+router.get('/admin/orders', requireAdmin, asyncHandler(async (request, response) => {
+  const result = await pool.query(
+    `SELECT
+       orders.id, orders.customer_name, orders.customer_phone, orders.shipping_address,
+       orders.shipping_province, orders.customer_notes, orders.payment_method, orders.status,
+       orders.subtotal, orders.shipping_fee, orders.created_at,
+       COALESCE(
+         json_agg(json_build_object(
+           'product_name', order_items.product_name,
+           'unit_price', order_items.unit_price,
+           'quantity', order_items.quantity,
+           'line_total', order_items.line_total
+         ) ORDER BY order_items.id) FILTER (WHERE order_items.id IS NOT NULL),
+         '[]'::json
+       ) AS items
+     FROM orders
+     LEFT JOIN order_items ON order_items.order_id = orders.id
+     GROUP BY orders.id
+     ORDER BY orders.created_at DESC
+     LIMIT 100`,
+  )
+  return response.json({ data: result.rows })
+}))
+
+router.patch('/admin/orders/:id/status', requireAdmin, asyncHandler(async (request, response) => {
+  if (!/^[1-9]\d{0,17}$/.test(request.params.id)) {
+    return response.status(400).json({ error: 'Order ID is invalid.' })
+  }
+  if (!orderStatuses.has(request.body?.status)) {
+    return response.status(400).json({ error: 'Choose a valid order status.' })
+  }
+  const result = await pool.query(
+    'UPDATE orders SET status = $1 WHERE id = $2 RETURNING id, status',
+    [request.body.status, request.params.id],
+  )
+  if (!result.rowCount) return response.status(404).json({ error: 'Order not found.' })
+  return response.json({ data: result.rows[0] })
 }))
 
 export default router

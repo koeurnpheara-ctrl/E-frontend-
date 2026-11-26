@@ -1,5 +1,6 @@
 import React from 'react'
 import { useEffect, useState } from 'react'
+import { useCart } from '../contexts/CartContext.jsx'
 
 function formatPrice(price) {
   if (price == null || price === '') return null
@@ -15,6 +16,8 @@ export default function ProductCard({ product }) {
   const price = formatPrice(product.price)
   const category = typeof product.category === 'string' ? product.category : product.category?.name
   const [imageError, setImageError] = useState(false)
+  const { addItem, lastAddedId } = useCart()
+  const canAddToCart = product.id != null && Number.isFinite(Number(product.price)) && Number(product.price) >= 0
 
   useEffect(() => {
     setImageError(false)
@@ -46,6 +49,20 @@ export default function ProductCard({ product }) {
         </div>
         {price && <span className="product-price">{price}</span>}
       </div>
+      <button
+        className="product-buy-button"
+        type="button"
+        disabled={!canAddToCart}
+        onClick={() => addItem({
+          id: product.id,
+          name,
+          price: product.price,
+          image_url: image,
+        })}
+      >
+        <i className={`bi ${lastAddedId === String(product.id) ? 'bi-check2' : 'bi-bag-plus'}`} aria-hidden="true" />
+        {lastAddedId === String(product.id) ? 'Added to bag' : 'Add to bag'}
+      </button>
     </article>
   )
 }

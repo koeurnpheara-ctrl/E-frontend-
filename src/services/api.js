@@ -50,3 +50,18 @@ export async function updateProduct(token, id, product) {
 export async function deleteProduct(token, id) {
   await api.delete(`/admin/products/${id}`, adminConfig(token))
 }
+
+export async function createOrder(order) {
+  const response = await api.post('/orders', order)
+  return response.data.data
+}
+
+export async function getAdminOrders(token) {
+  const response = await api.get('/admin/orders', adminConfig(token))
+  return getCollection(response.data, 'orders')
+}
+
+export async function updateOrderStatus(token, id, status) {
+  const response = await api.patch(`/admin/orders/${id}/status`, { status }, adminConfig(token))
+  return response.data.data
+}

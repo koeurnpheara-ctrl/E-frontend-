@@ -6,6 +6,7 @@ import {
   loginAdmin,
   updateProduct,
 } from '../services/api.js'
+import AdminOrders from './AdminOrders.jsx'
 import './Admin.css'
 
 const TOKEN_KEY = 'form-field-admin-token'
@@ -329,6 +330,7 @@ export default function Admin() {
             />
           )}
         </div>
+        <AdminOrders token={token} />
       </div>
     </main>
   )

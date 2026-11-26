@@ -1,18 +1,22 @@
 import React from 'react'
+import { Link } from 'react-router-dom'
+import { useCart } from '../contexts/CartContext.jsx'
 
 export default function SiteHeader() {
+  const { itemCount } = useCart()
+
   return (
     <>
       <div className="announcement">
         <span>Thoughtful goods, made for everyday living</span>
-        <span className="announcement-note">Complimentary delivery on orders over $75</span>
+        <span className="announcement-note">Cash on delivery across Cambodia</span>
       </div>
       <header className="site-header">
         <nav className="navbar navbar-expand-lg container site-nav" aria-label="Main navigation">
-          <a className="navbar-brand brand" href="/" aria-label="Form and Field home">
+          <Link className="navbar-brand brand" to="/" aria-label="Form and Field home">
             <span className="brand-mark" aria-hidden="true">f.</span>
             <span>form <span className="brand-amp">&</span> field</span>
-          </a>
+          </Link>
           <button
             className="navbar-toggler"
             type="button"
@@ -26,14 +30,15 @@ export default function SiteHeader() {
           </button>
           <div className="collapse navbar-collapse" id="mainNavigation">
             <ul className="navbar-nav mx-auto">
-              <li className="nav-item"><a className="nav-link" href="#shop">Shop all</a></li>
-              <li className="nav-item"><a className="nav-link" href="#categories">Collections</a></li>
-              <li className="nav-item"><a className="nav-link" href="#story">Our story</a></li>
+              <li className="nav-item"><a className="nav-link" href="/#shop">Shop all</a></li>
+              <li className="nav-item"><a className="nav-link" href="/#categories">Collections</a></li>
+              <li className="nav-item"><a className="nav-link" href="/#story">Our story</a></li>
             </ul>
-            <a className="nav-action" href="#shop" aria-label="Browse the shop">
+            <Link className="nav-action cart-nav-action" to="/cart" aria-label={`Shopping bag, ${itemCount} items`}>
               <i className="bi bi-bag" aria-hidden="true" />
-              <span className="nav-action-label">Shop</span>
-            </a>
+              <span>Bag</span>
+              <span className="cart-count" aria-live="polite">{itemCount}</span>
+            </Link>
           </div>
         </nav>
       </header>
